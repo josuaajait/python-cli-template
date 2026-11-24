@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "python-cli-template"
+version = "0.1.0"
+description = "A dependency-free Python CLI starter with readable terminal output and clean JSON pipelines"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "Mikhael Josua Roganda"}]
+dependencies = []
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+Repository = "https://github.com/josuaajait/python-cli-template"
+Issues = "https://github.com/josuaajait/python-cli-template/issues"
+
+[project.scripts]
+python-cli = "cli_template.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["cli_template*"]
