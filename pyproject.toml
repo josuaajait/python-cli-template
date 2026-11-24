@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "python-cli-template"
 version = "0.1.0"
-description = "A dependency-free Python CLI starter with readable terminal output and clean JSON pipelines"
+description = "A Rich-powered Python CLI starter with readable terminal output and clean JSON pipelines"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{name = "Mikhael Josua Roganda"}]
-dependencies = []
+dependencies = ["rich>=14.2,<16"]
 classifiers = [
     "Environment :: Console",
     "Operating System :: OS Independent",

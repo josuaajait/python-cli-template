@@ -39,7 +39,7 @@ class CliTests(unittest.TestCase):
         return subprocess.run([sys.executable, '-m', 'cli_template', *args], cwd=ROOT,
                               capture_output=True, text=True, encoding='utf-8')
 
-    def test_module_runs_without_installing_any_dependency(self):
+    def test_greeting_from_module(self):
         result = self.command('greet', 'Mikhael')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)['message'], 'Hello, Mikhael!')
@@ -67,7 +67,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result.stderr, '')
 
     def test_failed_demo_reports_failure_with_completed_work(self):
-        result = self.command('demo', '--steps', '2', '--delay', '0', '--fail')
+        result = self.command('demo', '--steps', '2', '--delay', '0', '--fail', '--no-archive')
         self.assertEqual(result.returncode, 1)
         data = json.loads(result.stdout)
         self.assertEqual(data['status'], 'FAILED')
@@ -89,7 +89,7 @@ class CliTests(unittest.TestCase):
                 result = self.command(*args)
                 self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_doctor_is_read_only_and_needs_only_python(self):
+    def test_doctor_reports_ready_runtime(self):
         result = self.command('doctor')
         self.assertEqual(result.returncode, 0, result.stderr)
         data = json.loads(result.stdout)

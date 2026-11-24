@@ -3,6 +3,7 @@
 Use Python >=3.11. Run from the repository root:
 
 ```sh
+python -m pip install -e .
 python -m unittest discover -s tests -v
 python -m cli_template demo --pretty --delay 0
 python -m cli_template doctor --json

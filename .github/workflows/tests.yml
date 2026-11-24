@@ -23,9 +23,9 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
-      - name: Run standard-library tests
-        run: python -m unittest discover -s tests -v
       - name: Install local package
         run: python -m pip install .
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
       - name: Smoke installed command
         run: python-cli doctor --json

@@ -1,7 +1,4 @@
-"""PTerm-inspired presentation using only Python's standard library.
-
-Presentation stays separate from application logic and command exit codes.
-"""
+"""Terminal presentation and complete machine-readable command results."""
 from contextvars import ContextVar
 import itertools
 import json
@@ -11,6 +8,15 @@ import shutil
 import sys
 import threading
 import unicodedata
+
+from rich import box
+from rich.console import Console as RichConsole
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+
+from .archives import log_directory, save_result
+from .summary import preview
 
 
 _active = ContextVar('cli_console', default=None)
@@ -93,6 +99,8 @@ class Console:
                  mode='auto', no_color=False):
         self.title, self.description = title, description
         self.output, self.errors = sys.stdout, sys.stderr
+        self.essential = ()
+        self.log_dir = None
         self._stop = threading.Event()
         self._thread = None
         self._lock = threading.RLock()
@@ -106,10 +114,13 @@ class Console:
     def width(self):
         return max(16, min(120, shutil.get_terminal_size((88, 24)).columns - 1))
 
-    def _style(self, text, code, stream):
+    def _color_enabled(self, stream):
         # Legacy Windows consoles without ANSI support get the same plain layout.
         supported = os.name != 'nt' or any(os.environ.get(key) for key in ('WT_SESSION', 'ANSICON', 'TERM'))
-        if self.pretty and not self.no_color and stream.isatty() and supported:
+        return self.pretty and not self.no_color and stream.isatty() and supported
+
+    def _style(self, text, code, stream):
+        if self._color_enabled(stream):
             return f'\x1b[{code}m{text}\x1b[0m'
         return text
 
@@ -123,42 +134,84 @@ class Console:
         with self._lock:
             print(text, file=stream, flush=True)
 
-    def header(self, command):
-        if not self.pretty:
-            return
-        self._print('')
-        for line in _wrap_cells(_terminal_text(self.title, self.output), self.width - 2):
-            self._print(' ' + line + ' ', code='1;97;44')
-        for line in _wrap_cells(_terminal_text(f'{command} / {self.description}', self.output), self.width - 2):
-            self._print(' ' + line, code='36')
-        self._print(' ' + '-' * (self.width - 2), code='36')
+    def _rich(self, renderable):
+        color = self._color_enabled(self.output)
+        renderer = RichConsole(file=self.output, width=self.width, color_system='standard' if color else None,
+                               force_terminal=color, legacy_windows=False, highlight=False, markup=False)
+        renderer.print(renderable)
 
-    def result(self, value):
+    def header(self, command):
+        if self.pretty:
+            title = Text('  ', style='on cyan')
+            title.append(' ' + _terminal_text(self.title, self.output), style='bold cyan')
+            title.append('  /  ' + _terminal_text(command, self.output))
+            title.append('\n   ' + _terminal_text(self.description, self.output), style='dim')
+            self._rich(title)
+            self._print('')
+
+    def keep(self, *fields):
+        """Show these top-level fields first and render their entire subtrees."""
+        self.essential = tuple(dict.fromkeys((*self.essential, *fields)))
+
+    def result(self, value, *, exit_code=0, archive=True, trace=None, debug=False):
         self.stop()
-        if not self.pretty:
-            # JSON escapes preserve Unicode values even on legacy code pages.
-            print(json.dumps(value, ensure_ascii=True, indent=2), file=self.output)
-            return
         status = value.get('status') if isinstance(value, dict) else None
         if status is None and isinstance(value, dict):
             if 'ready' in value:
                 status = 'READY' if value['ready'] else 'NOT READY'
             elif 'valid' in value:
                 status = 'VALID' if value['valid'] else 'INVALID'
-        self._print('')
-        if status is not None:
-            status = str(status)
-        code = '32' if status in _good else '31' if status in _bad else '33' if status in _warn else '36'
-        self._print(f' [ {status or "RESULT"} ]', code='1;' + code)
-        self._render(value)
-        self._print('')
+        status = str(status or 'RESULT')
+        failed = exit_code not in (0, 130) or status.upper() in _bad | {'NOT READY'}
+        self._summarized = False
+        if self.pretty:
+            color = 'green' if status in _good else 'red' if failed else 'yellow' if status in _warn else 'cyan'
+            heading = Text(_terminal_text(status, self.output), style='bold ' + color)
+            body = value
+            if isinstance(value, dict):
+                body = {key: value[key] for key in (*self.essential, *value) if key in value and key != 'status'}
+                if all(type(body.get(key)) is int for key in ('succeeded', 'failed')):
+                    heading.append(_terminal_text(f"   {body.pop('succeeded')} succeeded  /  {body.pop('failed')} failed",
+                                                  self.output))
+            self._rich(heading)
+            if isinstance(body, dict):
+                for key in self.essential:
+                    if key in body:
+                        self._section(_label(key))
+                        self._render(body.pop(key), full=True)
+                if failed and ('error' in body or 'message' in body):
+                    key = 'error' if 'error' in body else 'message'
+                    error = Text(_terminal_text(_value(body.pop(key)), self.output))
+                    if 'location' in body:
+                        error.append('\n' + _terminal_text(body.pop('location'), self.output), style='dim')
+                    self._rich(Panel(error, box=box.ASCII, border_style='red', expand=False))
+            if body or not isinstance(body, dict):
+                self._render(body)
+        else:
+            print(json.dumps(value, ensure_ascii=True, indent=2), file=self.output)
+
+        if archive and (self._summarized or failed):
+            try:
+                path = save_result(log_directory(self.log_dir), value, trace)
+            except (OSError, RuntimeError, ValueError) as error:
+                self._print(f'WARNING: Cannot save archive: {error}', stream=self.errors)
+                self._print(json.dumps(value, ensure_ascii=True, indent=2), stream=self.errors)
+                if trace:
+                    self._print(trace, stream=self.errors)
+                    debug = False
+            else:
+                self._print(f'Archive: {path}', stream=self.output if self.pretty else self.errors)
+        elif self._summarized:
+            self._print('Full result: use --json.')
+        if debug and trace:
+            self._print(trace, stream=self.errors)
 
     def _section(self, title):
         self._print('')
         for line in _wrap_cells(_terminal_text(title, self.output), self.width - 2):
             self._print(' ' + line, code='1;36')
 
-    def _render(self, value):
+    def _render(self, value, *, full=False):
         if isinstance(value, dict):
             if not value:
                 self._print(' (empty)')
@@ -170,8 +223,19 @@ class Console:
                 if not isinstance(item, (dict, list)):
                     continue
                 self._section(_label(key))
-                self._render(item)
+                self._render(item, full=full)
         elif isinstance(value, list):
+            if not full:
+                selection = preview(value)
+                if selection.omitted or selection.groups:
+                    self._summarized = True
+                    self._print(f' {len(value)} total; {selection.omitted} rows omitted from preview.')
+                    if selection.groups:
+                        for group in selection.groups:
+                            self._section(f"{group['count']} failed: {group['reason']}")
+                            self._render(group['example'])
+                        return
+                    value = selection.rows
             if not value:
                 self._print(' (empty)')
             elif all(isinstance(item, dict) and all(not isinstance(v, (dict, list)) for v in item.values())
@@ -183,7 +247,7 @@ class Console:
                 for index, item in enumerate(value, 1):
                     if isinstance(item, (dict, list)):
                         self._section(str(index))
-                        self._render(item)
+                        self._render(item, full=full)
                     else:
                         for line in _wrap_cells(_terminal_text(_value(item), self.output), self.width - 4):
                             self._print(' - ' + line)
@@ -203,26 +267,15 @@ class Console:
                     for line in _wrap_cells(f'{heading}: {cell}', self.width - 2):
                         self._print(' ' + line)
             return
-        minima = [2 if any(_cell_width(char) == 2 for row in cells for char in row[i]) else 1
-                  for i in range(len(headings))]
-        widths = [max(minima[i], max(_cell_width(line) for row in cells for line in row[i].split('\n')))
-                  for i in range(len(headings))]
-        available = self.width - (3 * len(widths) + 1)
-        while sum(widths) > available:
-            widest = max((i for i in range(len(widths)) if widths[i] > minima[i]), key=widths.__getitem__)
-            widths[widest] -= 1
-        border = '+' + '+'.join('-' * (width + 2) for width in widths) + '+'
-        self._print(border, code='90')
-        for index, row in enumerate(cells):
-            wrapped = [_wrap_cells(cell, width)
-                       for cell, width in zip(row, widths)]
-            for line in itertools.zip_longest(*wrapped, fillvalue=''):
-                self._print('| ' + ' | '.join(part + ' ' * (width - _cell_width(part))
-                                              for part, width in zip(line, widths)) + ' |',
-                            code='1' if index == 0 else None)
-            if index == 0:
-                self._print(border, code='90')
-        self._print(border, code='90')
+        wide = any(_cell_width(char) == 2 for row in cells for cell in row for char in cell)
+        can_draw = self._color_enabled(self.output) and _terminal_text('╭', self.output) == '╭'
+        table = Table(box=box.ROUNDED if can_draw else box.ASCII, border_style='dim cyan', header_style='bold cyan',
+                      padding=(0, 1), safe_box=False)
+        for heading in cells[0]:
+            table.add_column(Text(heading), overflow='fold', min_width=2 if wide else 1)
+        for row in cells[1:]:
+            table.add_row(*(Text(cell) for cell in row))
+        self._rich(table)
 
     def notice(self, message, level='INFO'):
         self.stop()

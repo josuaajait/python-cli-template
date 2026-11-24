@@ -4,53 +4,35 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Starter CLI Python dengan header berwarna, spinner, tabel hasil, dan output JSON yang siap dipakai oleh script. Cukup Python **3.11 atau lebih baru**, tanpa dependency runtime tambahan.
+Template CLI untuk Python **3.11+**. Terminal menampilkan ringkasan, tabel, dan pesan error menggunakan Rich. Ketika stdout dialihkan ke file atau pipe, command menghasilkan satu dokumen JSON lengkap. Gaya tampilannya mengadaptasi [PTerm CLI Template](https://github.com/pterm/cli-template).
 
-Gaya tampilannya terinspirasi [PTerm CLI Template](https://github.com/pterm/cli-template), lalu diadaptasi ke Python standard library. Ini implementasi Python mandiri; PTerm/Cobra/Go tidak diperlukan.
-
-## Langsung coba
+## Langsung coba di Windows
 
 ```powershell
-git clone https://github.com/josuaajait/python-cli-template.git
-cd python-cli-template
-python -m cli_template demo
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -e .
+.\.venv\Scripts\python-cli demo --batch
 ```
 
-Tidak perlu install paket untuk mencoba dari folder repository. Perintah yang sama bisa digunakan di PowerShell, Windows Terminal, macOS, atau Linux; bila interpreter bernama `python3`, gunakan `python3` sebagai pengganti `python`.
+Jalankan dari folder repo. Di macOS atau Linux, gunakan `.venv/bin/python` dan `.venv/bin/python-cli`. Dari environment yang sudah aktif, `python -m cli_template` juga bisa dipakai.
 
-Contoh tampilan terminal; digest diperpendek di ilustrasi ini:
+Demo batch memvalidasi 1.000 item lokal. Tiga kesalahan sengaja disisipkan untuk memperlihatkan perilaku command dengan exit code 1. Ringkasan yang terlihat di terminal memuat:
 
 ```text
- PYTHON CLI
- demo / A reusable Python CLI starter
- -------------------------------------------------------------
-
- [WORKING] Step 1/3: hashing sample input...
- [OK] Step 1/3 complete.
- [WORKING] Step 2/3: hashing sample input...
- [OK] Step 2/3 complete.
- [WORKING] Step 3/3: hashing sample input...
- [OK] Step 3/3 complete.
-
- [ SUCCESS ]
-+-----------+---------+
-| Field     | Value   |
-+-----------+---------+
-| Status    | SUCCESS |
-| Completed | 3       |
-+-----------+---------+
+FAILED   997 succeeded  /  3 failed
 
  Results
-+------+---------------+
-| Step | Sha256        |
-+------+---------------+
-| 1    | bedcdd84...   |
-| 2    | 631831e6...   |
-| 3    | ac34c6fe...   |
-+------+---------------+
+ 1000 total; 997 rows omitted from preview.
++----------------------------------------+
+| Item      | Status | Reason            |
+|-----------+--------+-------------------|
+| item-0017 | FAILED | Empty record      |
+| item-0506 | FAILED | Invalid integer   |
+| item-0998 | FAILED | Negative quantity |
++----------------------------------------+
 ```
 
-`demo` benar-benar menghitung SHA-256 atas input contoh; jeda singkat hanya untuk memperlihatkan spinner. Tidak mengakses jaringan atau menulis file. Hasil sesungguhnya menampilkan digest lengkap.
+Baris berikutnya menunjukkan direktori arsip. Untuk daftar yang lebih panjang dari delapan baris, renderer memilih kegagalan terlebih dahulu. Jika lebih dari delapan baris gagal, setiap penyebab mendapat hitungan dan satu contoh. Untuk daftar yang seluruhnya berhasil, delapan baris pertama menjadi pratinjau.
 
 ## Command contoh
 
@@ -62,6 +44,9 @@ Contoh tampilan terminal; digest diperpendek di ilustrasi ini:
 | `python -m cli_template demo` | Proses bertahap dengan spinner dan tabel |
 | `python -m cli_template demo --steps 5 --delay 0.2` | Mengatur jumlah langkah dan jeda demo |
 | `python -m cli_template demo --fail` | Mencontohkan hasil gagal dan exit code 1 |
+| `python -m cli_template demo --batch` | Ringkasan dan arsip lengkap 1.000 item |
+| `python -m cli_template archives` | Lokasi, jumlah, dan ukuran arsip |
+| `python -m cli_template archives --clean` | Tinjau jumlah dan ukuran, lalu konfirmasi penghapusan |
 | `python -m cli_template --help` | Daftar command dan opsi |
 | `python -m cli_template --version` | Versi aplikasi |
 
@@ -89,6 +74,20 @@ Tabel membungkus nilai panjang sesuai lebar terminal. Nilai `0`, `false`, `null`
 
 Exit code: `0` berhasil, `1` command selesai dengan hasil gagal, `2` argumen/input atau operasi gagal, `130` dibatalkan dengan Ctrl+C.
 
+## Error dan arsip
+
+Saat handler melempar exception, hasil memuat tipe, pesan asli dan lokasi. Tambahkan `--debug` untuk traceback di stderr. Hasil gagal yang dikembalikan handler memakai alasan yang disediakan handler tersebut.
+
+Setiap hasil yang dipersingkat di terminal atau berakhir gagal disimpan ke direktori unik. `result.json` berisi payload lengkap yang sama dengan stdout mode JSON. `result.log` memuat semua nilai dalam format teks serta traceback untuk exception. Pada mode JSON, lokasi arsip dicetak ke stderr. Hasil singkat yang berhasil langsung ditampilkan tanpa membuat arsip.
+
+| Platform | Direktori default |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%/python-cli-template/logs` |
+| macOS | `~/Library/Logs/python-cli-template/logs` |
+| Linux | `$XDG_STATE_HOME/python-cli-template/logs`, default `~/.local/state/python-cli-template/logs` |
+
+Gunakan `--log-dir DIR` atau variabel `PYTHON_CLI_LOG_DIR` untuk memilih lokasi sendiri. `--no-archive` menonaktifkan penyimpanan untuk satu eksekusi. Jika penulisan gagal, stderr menampilkan peringatan dan hasil lengkap. Exit code tetap mengikuti pekerjaan utama. Arsip tersimpan sampai pengguna memilih menghapusnya.
+
 ## Jadikan CLI milikmu
 
 1. Ganti `APP_NAME` dan `APP_DESCRIPTION` di `cli_template/cli.py`.
@@ -101,6 +100,7 @@ Contoh handler:
 
 ```python
 def build(args, console):
+    console.keep('files')  # Selalu tampilkan seluruh field ini, termasuk jika nilainya list.
     console.progress('Building output...')
     # Jalankan pekerjaanmu di sini.
     console.notice('Build complete.', 'OK')
@@ -127,19 +127,6 @@ with Console(title='MY APP', description='My command line tool') as console:
 
 Keluar dari blok `with` selalu menghentikan spinner, termasuk bila terjadi exception. `console.read('Continue? ')` menghentikan spinner sebelum membaca input. Pemanggilan `console.result(...)` tidak menentukan exit code; handler tetap bertanggung jawab atas arti hasilnya.
 
-## Instalasi opsional
-
-Untuk menggunakan command pendek `python-cli`, buat virtual environment dan install secara lokal. Runtime tetap tanpa dependency; pip mungkin perlu mengunduh setuptools untuk proses build/install.
-
-```powershell
-python -m venv .venv
-# Windows
-.\.venv\Scripts\python -m pip install -e .
-.\.venv\Scripts\python-cli demo
-```
-
-Di macOS/Linux gunakan `.venv/bin/python` dan `.venv/bin/python-cli`.
-
 ## Struktur dan pengujian
 
 ```text
@@ -148,6 +135,8 @@ cli_template/
   __main__.py       # python -m cli_template
   cli.py            # Branding, parser, dan contoh handler
   console.py        # Tampilan terminal dan JSON
+  summary.py        # Pemilihan contoh dan pengelompokan penyebab
+  archives.py       # Penyimpanan serta penghapusan hasil lengkap
 tests/test_cli.py   # Tes CLI asli dan kontrak renderer
 .github/workflows/tests.yml
 pyproject.toml
@@ -161,4 +150,4 @@ Workflow CI menjalankan tes dan smoke installed entry point pada Windows/Linux d
 
 ## Lisensi dan asal
 
-[MIT](LICENSE), Mikhael Josua Roganda. Template ini dipisahkan dari lapisan presentasi CLI Critic Agent dan digeneralisasi; tidak membawa logika Laravel, model AI, atau artefak penelitian. Referensi visual: [pterm/cli-template](https://github.com/pterm/cli-template). Kode Go, release automation, dan branding PTerm tidak disalin.
+[MIT](LICENSE), Mikhael Josua Roganda.
