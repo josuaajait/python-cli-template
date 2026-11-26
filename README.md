@@ -165,7 +165,27 @@ pyproject.toml
 python -m unittest discover -s tests -v
 ```
 
-Workflow CI menjalankan tes dan smoke installed entry point pada Windows/Linux dengan Python 3.11, 3.12, dan 3.13. Lihat [kontribusi](CONTRIBUTING.md) dan [catatan desain](docs/design.md).
+Tool pengembangan (ruff, mypy, coverage) adalah dependency opsional `dev`. Tool ini tidak ikut terpasang untuk pengguna CLI. Pasang ke virtual environment project, lalu jalankan:
+
+```powershell
+.\.venv\Scripts\python -m pip install -e ".[dev]"
+```
+
+```powershell
+.\.venv\Scripts\python -m ruff check .
+```
+
+```powershell
+.\.venv\Scripts\python -m mypy
+```
+
+```powershell
+.\.venv\Scripts\python -m coverage run -m unittest discover -s tests; .\.venv\Scripts\python -m coverage combine; .\.venv\Scripts\python -m coverage report
+```
+
+Semua fungsi di `cli_template` dan `scripts` wajib memiliki anotasi tipe (`disallow_untyped_defs`). Coverage mencakup command yang dijalankan lewat subprocess dan gagal bila di bawah 85%.
+
+Workflow CI menjalankan ruff dan mypy, lalu menjalankan tes dengan coverage dan smoke installed entry point pada Windows, Linux, dan macOS dengan Python 3.11, 3.12, dan 3.13. Lihat [kontribusi](CONTRIBUTING.md) dan [catatan desain](docs/design.md).
 
 ## Lisensi dan asal
 

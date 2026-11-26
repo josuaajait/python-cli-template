@@ -9,6 +9,7 @@ archive folder, log-directory environment variable, terminal title and
 folder. Lines containing repository URLs are left for you to update by hand.
 """
 import argparse
+from collections.abc import Iterator
 import keyword
 from pathlib import Path
 import re
@@ -24,7 +25,7 @@ SKIP_DIRECTORIES = {'.git', '.venv', 'venv', 'build', 'dist', '__pycache__', '.t
 NAME = re.compile(r'[a-z][a-z0-9]*(?:-[a-z0-9]+)*')
 
 
-def replacements(name, package, title, description):
+def replacements(name: str, package: str, title: str, description: str | None) -> list[tuple[str, str]]:
     pairs = [
         # Longer names first: 'python-cli' is a prefix of 'python-cli-template'.
         ('python-cli-template', name),
@@ -38,8 +39,8 @@ def replacements(name, package, title, description):
     return pairs
 
 
-def rewrite(text, pairs):
-    lines = []
+def rewrite(text: str, pairs: list[tuple[str, str]]) -> str:
+    lines: list[str] = []
     for line in text.splitlines(keepends=True):
         if 'github.com' not in line:
             for old, new in pairs:
@@ -48,7 +49,7 @@ def rewrite(text, pairs):
     return ''.join(lines)
 
 
-def project_files(root):
+def project_files(root: Path) -> Iterator[Path]:
     script = Path(__file__).resolve()
     for path in sorted(root.rglob('*')):
         relative = path.relative_to(root).parts
@@ -58,7 +59,7 @@ def project_files(root):
             yield path
 
 
-def parse(argv):
+def parse(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Rename this template into your own CLI.')
     parser.add_argument('name', help='Distribution and command name, e.g. my-tool.')
     parser.add_argument('--package', help='Import package name (default: name with "-" replaced by "_").')
@@ -75,7 +76,7 @@ def parse(argv):
     return args
 
 
-def main(argv=None, root=ROOT):
+def main(argv: list[str] | None = None, root: Path = ROOT) -> int:
     args = parse(argv)
     source, target = root / OLD_PACKAGE, root / args.package
     if not source.is_dir():

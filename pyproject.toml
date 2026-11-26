@@ -22,6 +22,10 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
+[project.optional-dependencies]
+# Development only: linting, type checking and coverage. Not installed for end users.
+dev = ["ruff>=0.8", "mypy>=1.13", "coverage>=7.10"]
+
 [project.urls]
 Repository = "https://github.com/josuaajait/python-cli-template"
 Issues = "https://github.com/josuaajait/python-cli-template/issues"
@@ -31,3 +35,35 @@ python-cli = "cli_template.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["cli_template*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["build", ".tmp"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.ruff.lint.isort]
+force-sort-within-sections = true
+lines-after-imports = 2
+
+[tool.mypy]
+python_version = "3.11"
+files = ["cli_template", "scripts"]
+check_untyped_defs = true
+disallow_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+[tool.coverage.run]
+source = ["cli_template"]
+branch = true
+# Subprocess tests run the CLI in a child interpreter; `coverage combine` merges their data.
+parallel = true
+patch = ["subprocess"]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+skip_covered = true

@@ -1,16 +1,19 @@
 """Terminal presentation and complete machine-readable command results."""
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 import itertools
 import json
 import os
+from pathlib import Path
 import re
 import shutil
 import sys
 import threading
+from typing import Any, TextIO
 import unicodedata
 
 from rich import box
 from rich.console import Console as RichConsole
+from rich.console import RenderableType
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -20,45 +23,45 @@ from .status import FAILED, GOOD, WARN
 from .summary import preview
 
 
-_active = ContextVar('cli_console', default=None)
+_active: ContextVar['Console | None'] = ContextVar('cli_console', default=None)
 _escapes = re.compile(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-_]')
 _controls = re.compile(r'[\x00-\x08\x0b-\x1f\x7f-\x9f]')
 
 
-def current_console():
+def current_console() -> 'Console | None':
     return _active.get()
 
 
-def progress(message):
+def progress(message: str) -> None:
     console = current_console()
     if console is not None:
         console.progress(message)
 
 
-def notice(message, level='INFO'):
+def notice(message: str, level: str = 'INFO') -> None:
     console = current_console()
     if console is not None:
         console.notice(message, level)
 
 
-def _clean(value):
+def _clean(value: object) -> str:
     return _controls.sub('', _escapes.sub('', str(value))).replace('\t', '    ')
 
 
-def _terminal_text(value, stream):
+def _terminal_text(value: object, stream: TextIO) -> str:
     encoding = getattr(stream, 'encoding', None) or 'utf-8'
     return _clean(value).encode(encoding, errors='replace').decode(encoding)
 
 
-def _cell_width(text):
+def _cell_width(text: str) -> int:
     return sum(0 if unicodedata.combining(char) or char in '\u200d\ufe0f'
                else 2 if unicodedata.east_asian_width(char) in ('W', 'F') else 1
                for char in text)
 
 
-def _wrap_cells(text, width):
+def _wrap_cells(text: str, width: int) -> list[str]:
     """Wrap plain text by terminal cells, keeping wide glyphs together."""
-    lines = []
+    lines: list[str] = []
     for paragraph in text.split('\n'):
         if not paragraph:
             lines.append('')
@@ -80,11 +83,11 @@ def _wrap_cells(text, width):
     return lines
 
 
-def _label(key):
+def _label(key: object) -> str:
     return str(key).replace('_', ' ').capitalize()
 
 
-def _value(value):
+def _value(value: object) -> str:
     if value is None:
         return 'N/A'
     if isinstance(value, bool):
@@ -93,57 +96,61 @@ def _value(value):
 
 
 class Console:
-    def __init__(self, *, title='PYTHON CLI', description='A reusable Python CLI starter',
-                 mode='auto', no_color=False, app_id=DEFAULT_APP_ID, log_env=DEFAULT_LOG_ENV):
+    def __init__(self, *, title: str = 'PYTHON CLI', description: str = 'A reusable Python CLI starter',
+                 mode: str = 'auto', no_color: bool = False,
+                 app_id: str = DEFAULT_APP_ID, log_env: str = DEFAULT_LOG_ENV) -> None:
         self.title, self.description = title, description
         self.app_id, self.log_env = app_id, log_env
-        self.output, self.errors = sys.stdout, sys.stderr
-        self.essential = ()
-        self.log_dir = None
+        self.output: TextIO = sys.stdout
+        self.errors: TextIO = sys.stderr
+        self.essential: tuple[str, ...] = ()
+        self.log_dir: str | None = None
+        self._summarized = False
         self._stop = threading.Event()
-        self._thread = None
+        self._thread: threading.Thread | None = None
+        self._token: Token[Console | None] | None = None
         self._lock = threading.RLock()
         self.configure(mode, no_color)
 
     @property
-    def archive_root(self):
+    def archive_root(self) -> Path:
         return log_directory(self.log_dir, app_id=self.app_id, env=self.log_env)
 
-    def configure(self, mode='auto', no_color=False):
+    def configure(self, mode: str = 'auto', no_color: bool = False) -> None:
         self.pretty = mode == 'pretty' or (mode == 'auto' and self.output.isatty())
         self.no_color = no_color or 'NO_COLOR' in os.environ or os.environ.get('TERM') == 'dumb'
 
     @property
-    def width(self):
+    def width(self) -> int:
         return max(16, min(120, shutil.get_terminal_size((88, 24)).columns - 1))
 
-    def _color_enabled(self, stream):
+    def _color_enabled(self, stream: TextIO) -> bool:
         # Legacy Windows consoles without ANSI support get the same plain layout.
         supported = os.name != 'nt' or any(os.environ.get(key) for key in ('WT_SESSION', 'ANSICON', 'TERM'))
         return self.pretty and not self.no_color and stream.isatty() and supported
 
-    def _style(self, text, code, stream):
+    def _style(self, text: str, code: str, stream: TextIO) -> str:
         if self._color_enabled(stream):
             return f'\x1b[{code}m{text}\x1b[0m'
         return text
 
-    def _print(self, text='', *, stream=None, code=None):
+    def _print(self, text: object = '', *, stream: TextIO | None = None, code: str | None = None) -> None:
         stream = stream or self.output
         # ASCII borders and replacement for unsupported characters keep old Windows
         # code pages usable. No escaping/sanitizing is applied to JSON data.
-        text = _terminal_text(text, stream)
+        line = _terminal_text(text, stream)
         if code:
-            text = self._style(text, code, stream)
+            line = self._style(line, code, stream)
         with self._lock:
-            print(text, file=stream, flush=True)
+            print(line, file=stream, flush=True)
 
-    def _rich(self, renderable):
+    def _rich(self, renderable: RenderableType) -> None:
         color = self._color_enabled(self.output)
         renderer = RichConsole(file=self.output, width=self.width, color_system='standard' if color else None,
                                force_terminal=color, legacy_windows=False, highlight=False, markup=False)
         renderer.print(renderable)
 
-    def header(self, command):
+    def header(self, command: str) -> None:
         if self.pretty:
             title = Text('  ', style='on cyan')
             title.append(' ' + _terminal_text(self.title, self.output), style='bold cyan')
@@ -152,13 +159,14 @@ class Console:
             self._rich(title)
             self._print('')
 
-    def keep(self, *fields):
+    def keep(self, *fields: str) -> None:
         """Show these top-level fields first and render their entire subtrees."""
         self.essential = tuple(dict.fromkeys((*self.essential, *fields)))
 
-    def result(self, value, *, exit_code=0, archive=True, trace=None, debug=False):
+    def result(self, value: Any, *, exit_code: int = 0, archive: bool = True,
+               trace: str | None = None, debug: bool = False) -> None:
         self.stop()
-        status = value.get('status') if isinstance(value, dict) else None
+        status: object = value.get('status') if isinstance(value, dict) else None
         if status is None and isinstance(value, dict):
             if 'ready' in value:
                 status = 'READY' if value['ready'] else 'NOT READY'
@@ -170,12 +178,12 @@ class Console:
         if self.pretty:
             color = 'green' if status in GOOD else 'red' if failed else 'yellow' if status in WARN else 'cyan'
             heading = Text(_terminal_text(status, self.output), style='bold ' + color)
-            body = value
+            body: Any = value
             if isinstance(value, dict):
                 body = {key: value[key] for key in (*self.essential, *value) if key in value and key != 'status'}
                 if all(type(body.get(key)) is int for key in ('succeeded', 'failed')):
-                    heading.append(_terminal_text(f"   {body.pop('succeeded')} succeeded  /  {body.pop('failed')} failed",
-                                                  self.output))
+                    counts = f"   {body.pop('succeeded')} succeeded  /  {body.pop('failed')} failed"
+                    heading.append(_terminal_text(counts, self.output))
             self._rich(heading)
             if isinstance(body, dict):
                 for key in self.essential:
@@ -183,8 +191,8 @@ class Console:
                         self._section(_label(key))
                         self._render(body.pop(key), full=True)
                 if failed and ('error' in body or 'message' in body):
-                    key = 'error' if 'error' in body else 'message'
-                    error = Text(_terminal_text(_value(body.pop(key)), self.output))
+                    error_key = 'error' if 'error' in body else 'message'
+                    error = Text(_terminal_text(_value(body.pop(error_key)), self.output))
                     if 'location' in body:
                         error.append('\n' + _terminal_text(body.pop('location'), self.output), style='dim')
                     self._rich(Panel(error, box=box.ASCII, border_style='red', expand=False))
@@ -209,12 +217,12 @@ class Console:
         if debug and trace:
             self._print(trace, stream=self.errors)
 
-    def _section(self, title):
+    def _section(self, title: str) -> None:
         self._print('')
         for line in _wrap_cells(_terminal_text(title, self.output), self.width - 2):
             self._print(' ' + line, code='1;36')
 
-    def _render(self, value, *, full=False):
+    def _render(self, value: Any, *, full: bool = False) -> None:
         if isinstance(value, dict):
             if not value:
                 self._print(' (empty)')
@@ -257,7 +265,7 @@ class Console:
         else:
             self._print(' ' + _value(value))
 
-    def _table(self, headings, rows):
+    def _table(self, headings: list[str], rows: list[list[str]]) -> None:
         if not headings:
             self._print(' (empty)')
             return
@@ -266,7 +274,7 @@ class Console:
         if len(headings) * 9 + 1 > self.width:
             for index, row in enumerate(cells[1:], 1):
                 self._print(f' [{index}]', code='36')
-                for heading, cell in zip(cells[0], row):
+                for heading, cell in zip(cells[0], row, strict=True):
                     for line in _wrap_cells(f'{heading}: {cell}', self.width - 2):
                         self._print(' ' + line)
             return
@@ -280,7 +288,7 @@ class Console:
             table.add_row(*(Text(cell) for cell in row))
         self._rich(table)
 
-    def notice(self, message, level='INFO'):
+    def notice(self, message: object, level: str = 'INFO') -> None:
         self.stop()
         if not self.pretty:
             return
@@ -289,7 +297,7 @@ class Console:
             self._print(f' [{level}] {line}' if index == 0 else ' ' + line,
                         stream=self.errors, code=color)
 
-    def message(self, message):
+    def message(self, message: str) -> None:
         """Interactive messages are retained even in machine-output mode."""
         if self.pretty:
             self.notice(message)
@@ -297,27 +305,27 @@ class Console:
             self.stop()
             self._print(message, stream=self.errors)
 
-    def read(self, prompt):
+    def read(self, prompt: object) -> str:
         self.stop()
         with self._lock:
             print(self._style(_terminal_text(' > ' + str(prompt), self.errors), '1;36', self.errors),
                   end='', file=self.errors, flush=True)
         return input()
 
-    def error(self, message):
+    def error(self, message: str) -> None:
         if self.pretty:
             self.notice(message, 'ERROR')
         else:
             self.stop()
             print(message, file=self.errors)
 
-    def progress(self, message):
+    def progress(self, message: str) -> None:
         self.notice(message, 'WORKING')
         if not self.pretty or not self.errors.isatty() or os.environ.get('TERM') == 'dumb':
             return
         self._stop.clear()
 
-        def animate():
+        def animate() -> None:
             for frame in itertools.cycle('|/-\\'):
                 if self._stop.wait(0.12):
                     break
@@ -330,16 +338,18 @@ class Console:
         self._thread = threading.Thread(target=animate, name='cli-spinner', daemon=True)
         self._thread.start()
 
-    def stop(self):
+    def stop(self) -> None:
         if self._thread is not None:
             self._stop.set()
             self._thread.join()
             self._thread = None
 
-    def __enter__(self):
+    def __enter__(self) -> 'Console':
         self._token = _active.set(self)
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc: object) -> None:
         self.stop()
-        _active.reset(self._token)
+        if self._token is not None:
+            _active.reset(self._token)
+            self._token = None

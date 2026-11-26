@@ -1,4 +1,5 @@
 """Per-user, explicitly managed archives of complete command results."""
+from collections.abc import Callable
 from dataclasses import dataclass
 import json
 import os
@@ -7,6 +8,7 @@ from pprint import pformat
 import re
 import stat
 import sys
+from typing import Any
 from uuid import uuid4
 
 
@@ -16,7 +18,8 @@ DEFAULT_APP_ID = 'python-cli-template'
 DEFAULT_LOG_ENV = 'PYTHON_CLI_LOG_DIR'
 
 
-def log_directory(override=None, *, app_id=DEFAULT_APP_ID, env=DEFAULT_LOG_ENV):
+def log_directory(override: str | os.PathLike[str] | None = None, *,
+                  app_id: str = DEFAULT_APP_ID, env: str = DEFAULT_LOG_ENV) -> Path:
     if override or os.environ.get(env):
         return Path(override or os.environ[env]).expanduser().absolute()
     if os.name == 'nt':
@@ -28,7 +31,7 @@ def log_directory(override=None, *, app_id=DEFAULT_APP_ID, env=DEFAULT_LOG_ENV):
     return base / app_id / 'logs'
 
 
-def save_result(root, value, trace):
+def save_result(root: Path, value: Any, trace: str | None) -> Path:
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     run_id = uuid4().hex
     staging = root / f'.pending-{run_id}'
@@ -53,18 +56,18 @@ def save_result(root, value, trace):
 
 @dataclass(frozen=True)
 class ArchiveSnapshot:
-    directory_id: tuple
-    files: tuple
+    directory_id: tuple[int, int]
+    files: tuple[tuple[int, int, int, int], ...]
     size: int
 
 
-def _regular(info, kind):
+def _regular(info: os.stat_result, kind: Callable[[int], bool]) -> bool:
     return kind(info.st_mode) and not (
         getattr(info, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
     )
 
 
-def _snapshot(path):
+def _snapshot(path: Path) -> ArchiveSnapshot | None:
     info = path.lstat()
     if not _regular(info, stat.S_ISDIR) or {p.name for p in path.iterdir()} != set(_FILES):
         return None
@@ -76,8 +79,8 @@ def _snapshot(path):
                            sum(f.st_size for f in files))
 
 
-def list_archives(root):
-    entries = {}
+def list_archives(root: Path) -> dict[Path, ArchiveSnapshot]:
+    entries: dict[Path, ArchiveSnapshot] = {}
     if root.exists():
         for path in root.iterdir():
             if _RUN_NAME.fullmatch(path.name):
@@ -90,7 +93,7 @@ def list_archives(root):
     return entries
 
 
-def clean_archives(entries):
+def clean_archives(entries: dict[Path, ArchiveSnapshot]) -> int:
     removed = 0
     for path, expected in entries.items():
         claimed = path.with_name('.cleaning-' + uuid4().hex)

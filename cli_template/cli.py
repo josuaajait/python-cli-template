@@ -8,11 +8,16 @@ import re
 import sys
 import time
 import traceback
+from typing import TYPE_CHECKING, Any
 
 from . import __version__
 from .archives import clean_archives, list_archives
-from .commands import add_commands, argument, command
+from .commands import Result, add_commands, argument, command
 from .console import Console, current_console
+
+
+if TYPE_CHECKING:
+    from _typeshed import SupportsWrite
 
 
 # Customize these values to brand your new application.
@@ -25,14 +30,14 @@ RICH_MINIMUM = (14, 2)                 # Keep in sync with the rich dependency i
 
 
 class StyledParser(argparse.ArgumentParser):
-    def print_help(self, file=None):
+    def print_help(self, file: 'SupportsWrite[str] | None' = None) -> None:
         console = current_console()
         if console is not None and (file is None or file is sys.stdout):
             console.header(self.prog)
         super().print_help(file)
 
 
-def add_output_flags(parser):
+def add_output_flags(parser: argparse.ArgumentParser) -> None:
     group = parser.add_argument_group('output')
     formats = group.add_mutually_exclusive_group()
     formats.add_argument('--pretty', dest='output_format', action='store_const', const='pretty',
@@ -49,14 +54,14 @@ def add_output_flags(parser):
                        help='Disable ANSI colors; also respects NO_COLOR.')
 
 
-def step_count(value):
+def step_count(value: str) -> int:
     number = int(value)
     if not 1 <= number <= 20:
         raise argparse.ArgumentTypeError('steps must be between 1 and 20')
     return number
 
 
-def delay_seconds(value):
+def delay_seconds(value: str) -> float:
     number = float(value)
     if not math.isfinite(number) or not 0 <= number <= 5:
         raise argparse.ArgumentTypeError('delay must be finite and between 0 and 5 seconds')
@@ -66,14 +71,14 @@ def delay_seconds(value):
 @command('greet', help='Print a friendly structured greeting.')
 @argument('name', nargs='?', default='developer')
 @argument('--shout', action='store_true', help='Use uppercase text.')
-def greet(args, console):
+def greet(args: argparse.Namespace, console: Console) -> Result:
     message = f'Hello, {args.name}!'
     return {'status': 'SUCCESS', 'message': message.upper() if args.shout else message}, 0
 
 
-def release(text):
+def release(text: str) -> tuple[int, ...]:
     """Leading numeric release parts, e.g. '14.2.0rc1' -> (14, 2, 0)."""
-    parts = []
+    parts: list[int] = []
     for part in text.split('.'):
         digits = re.match(r'\d+', part)
         if digits is None:
@@ -85,7 +90,7 @@ def release(text):
 
 
 @command('doctor', help='Check the local Python runtime; makes no network requests.')
-def doctor(args, console):
+def doctor(args: argparse.Namespace, console: Console) -> Result:
     rich_version = version('rich')
     rich_minimum = '.'.join(map(str, RICH_MINIMUM))
     checks = [
@@ -97,14 +102,15 @@ def doctor(args, console):
             'platform': platform.system(), 'checks': checks}, 0 if ready else 1
 
 
-def batch_demo(console):
+def batch_demo(console: Console) -> Result:
     faults = {17: '', 506: 'sample,abc', 998: 'sample,-1'}
-    rows = []
+    rows: list[dict[str, Any]] = []
     failures = 0
     console.progress('Validating 1,000 local sample records...')
     for number in range(1, 1001):
         record = faults.get(number, f'sample,{number}')
         row = {'item': f'item-{number:04d}', 'status': 'SUCCESS'}
+        reason: str | None
         if not record:
             reason = 'Empty record'
         else:
@@ -127,18 +133,18 @@ def batch_demo(console):
 @argument('--steps', type=step_count, default=3, help='Number of sample inputs (1-20).')
 @argument('--delay', type=delay_seconds, default=0.35, help='Demo pacing per step, in seconds (0-5).')
 @argument('--fail', action='store_true', help='Demonstrate a failed result and exit code 1.')
-def demo(args, console):
+def demo(args: argparse.Namespace, console: Console) -> Result:
     """Hash sample inputs; delay is only for demonstrating a running spinner."""
     if args.batch:
         return batch_demo(console)
-    results = []
+    results: list[dict[str, Any]] = []
     for step in range(1, args.steps + 1):
         console.progress(f'Step {step}/{args.steps}: hashing sample input...')
         digest = hashlib.sha256(f'cli-template-sample-{step}'.encode()).hexdigest()
         time.sleep(args.delay)
         results.append({'step': step, 'sha256': digest})
         console.notice(f'Step {step}/{args.steps} complete.', 'OK')
-    result = {'status': 'FAILED' if args.fail else 'SUCCESS',
+    result: dict[str, Any] = {'status': 'FAILED' if args.fail else 'SUCCESS',
               'completed': len(results), 'results': results}
     if args.fail:
         result['error'] = 'Intentional failure requested by --fail; completed steps are retained.'
@@ -147,11 +153,11 @@ def demo(args, console):
 
 @command('archives', help='Show the count and size of saved runs.')
 @argument('--clean', action='store_true', help='Review size and confirm deletion of these archives.')
-def archives(args, console):
+def archives(args: argparse.Namespace, console: Console) -> Result:
     root = console.archive_root
     entries = list_archives(root)
     size = sum(entry.size for entry in entries.values())
-    result = {'status': 'SUCCESS', 'directory': str(root), 'archives': len(entries), 'bytes': size}
+    result: dict[str, Any] = {'status': 'SUCCESS', 'directory': str(root), 'archives': len(entries), 'bytes': size}
     if args.clean and entries:
         try:
             answer = console.read(f'Delete {len(entries)} archives ({size} bytes)? [y/N] ')
@@ -161,7 +167,7 @@ def archives(args, console):
     return result, 0
 
 
-def build_parser():
+def build_parser() -> argparse.ArgumentParser:
     parser = StyledParser(prog=PROG, description=APP_DESCRIPTION)
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     subcommands = parser.add_subparsers(dest='command', required=True, metavar='COMMAND')
@@ -171,7 +177,7 @@ def build_parser():
     return parser
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     # Help exits during parsing. Determine presentation preferences first so help
     # and version can be requested without running a command.
@@ -187,7 +193,8 @@ def main(argv=None):
         console.configure(getattr(args, 'output_format', 'auto'), getattr(args, 'no_color', False))
         console.log_dir = getattr(args, 'log_dir', None)
         console.header(args.command)
-        trace = None
+        trace: str | None = None
+        result: dict[str, Any]
         try:
             result, exit_code = args.handler(args, console)
         except KeyboardInterrupt:

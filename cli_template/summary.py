@@ -1,6 +1,7 @@
 
 """Choose representative rows without mutating the machine-readable payload."""
 from dataclasses import dataclass
+from typing import Any
 
 from .status import FAILED
 
@@ -10,12 +11,12 @@ PREVIEW_ROWS = 8
 
 @dataclass
 class Preview:
-    rows: list
+    rows: list[Any]
     omitted: int
-    groups: list
+    groups: list[dict[str, Any]]
 
 
-def failure_reason(row):
+def failure_reason(row: object) -> str | None:
     if not isinstance(row, dict):
         return None
     reason = row.get('reason') or row.get('error')
@@ -26,11 +27,11 @@ def failure_reason(row):
     return None
 
 
-def preview(rows):
+def preview(rows: list[Any]) -> Preview:
     if len(rows) <= PREVIEW_ROWS:
         return Preview(rows, 0, [])
-    failures = []
-    groups = {}
+    failures: list[Any] = []
+    groups: dict[str, dict[str, Any]] = {}
     for row in rows:
         cause = failure_reason(row)
         if cause is not None:

@@ -131,7 +131,9 @@ class PresentationTests(unittest.TestCase):
     def test_branding_controls_command_name_and_archive_location(self):
         state = Path(self.logs.parent) / 'state'
         environment = {'LOCALAPPDATA': str(state), 'XDG_STATE_HOME': str(state), 'MY_APP_LOGS': ''}
-        with patch('cli_template.cli.PROG', 'my-app'), patch('cli_template.cli.APP_ID', 'my-app'),                 patch('cli_template.cli.LOG_DIR_ENV', 'MY_APP_LOGS'), patch.dict('os.environ', environment),                 patch('cli_template.archives.sys.platform', 'linux'):
+        with (patch('cli_template.cli.PROG', 'my-app'), patch('cli_template.cli.APP_ID', 'my-app'),
+              patch('cli_template.cli.LOG_DIR_ENV', 'MY_APP_LOGS'), patch.dict('os.environ', environment),
+              patch('cli_template.archives.sys.platform', 'linux')):
             output = io.StringIO()
             with contextlib.redirect_stdout(output), self.assertRaises(SystemExit):
                 main(['--help'])
@@ -144,7 +146,8 @@ class PresentationTests(unittest.TestCase):
             self.assertEqual(len(list((state / 'my-app' / 'logs').glob('run-*'))), 1)
 
             override = Path(self.logs.parent) / 'override'
-            with patch.dict('os.environ', {'MY_APP_LOGS': str(override)}),                     contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            with (patch.dict('os.environ', {'MY_APP_LOGS': str(override)}),
+                  contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO())):
                 self.assertEqual(main(['demo', '--fail', '--delay', '0', '--json']), 1)
             self.assertEqual(len(list(override.glob('run-*'))), 1)
 
