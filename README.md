@@ -40,7 +40,7 @@ Baris berikutnya menunjukkan direktori arsip. Untuk daftar yang lebih panjang da
 | --- | --- |
 | `python -m cli_template greet Mikhael` | Contoh command sederhana dengan argumen |
 | `python -m cli_template greet Mikhael --shout` | Contoh opsi boolean |
-| `python -m cli_template doctor` | Pemeriksaan Python lokal tanpa jaringan |
+| `python -m cli_template doctor` | Pemeriksaan versi Python dan Rich lokal tanpa jaringan |
 | `python -m cli_template demo` | Proses bertahap dengan spinner dan tabel |
 | `python -m cli_template demo --steps 5 --delay 0.2` | Mengatur jumlah langkah dan jeda demo |
 | `python -m cli_template demo --fail` | Mencontohkan hasil gagal dan exit code 1 |
@@ -86,19 +86,37 @@ Setiap hasil yang dipersingkat di terminal atau berakhir gagal disimpan ke direk
 | macOS | `~/Library/Logs/python-cli-template/logs` |
 | Linux | `$XDG_STATE_HOME/python-cli-template/logs`, default `~/.local/state/python-cli-template/logs` |
 
-Gunakan `--log-dir DIR` atau variabel `PYTHON_CLI_LOG_DIR` untuk memilih lokasi sendiri. `--no-archive` menonaktifkan penyimpanan untuk satu eksekusi. Jika penulisan gagal, stderr menampilkan peringatan dan hasil lengkap. Exit code tetap mengikuti pekerjaan utama. Arsip tersimpan sampai pengguna memilih menghapusnya.
+Folder `python-cli-template` mengikuti `APP_ID`. Gunakan `--log-dir DIR` atau variabel `PYTHON_CLI_LOG_DIR` (nama variabelnya mengikuti `LOG_DIR_ENV`) untuk memilih lokasi sendiri. `--no-archive` menonaktifkan penyimpanan untuk satu eksekusi. Jika penulisan gagal, stderr menampilkan peringatan dan hasil lengkap. Exit code tetap mengikuti pekerjaan utama. Arsip tersimpan sampai pengguna memilih menghapusnya.
 
 ## Jadikan CLI milikmu
 
-1. Ganti `APP_NAME` dan `APP_DESCRIPTION` di `cli_template/cli.py`.
-2. Ganti metadata `[project]`, URL repository, dan nama command pada `[project.scripts]` di `pyproject.toml`.
-3. Tambahkan parser dan handler di `build_parser()`. Handler menerima `(args, console)` lalu mengembalikan `(result_dict, exit_code)`.
-4. Ganti command contoh dengan logika aplikasimu, tambah tes perilakunya, dan perbarui README/badge ini. Jika menamai ulang folder paket, perbarui imports, entry point, package discovery, tes, dan workflow.
+Cara tercepat: jalankan script rename sekali dari root repo. Script ini mengganti nama distribusi dan command, folder paket beserta imports, folder arsip, variabel environment arsip, serta judul terminal.
+
+```powershell
+python scripts/rename_template.py my-tool --description "Alat baris perintah saya"
+python -m pip install -e .
+my-tool doctor
+```
+
+Tambahkan `--dry-run` untuk melihat file yang akan berubah, `--package` untuk nama import lain, dan `--title` untuk judul lain. Baris yang memuat URL GitHub tidak diubah. Script mencetak sisa langkah manual: URL repository, badge, penulis, dan lisensi.
+
+Untuk mengatur secara manual:
+
+1. Ganti konstanta branding di bagian atas `cli_template/cli.py`: `APP_NAME`, `APP_DESCRIPTION`, `PROG` (nama command di help), `APP_ID` (folder arsip), `LOG_DIR_ENV` (variabel environment untuk lokasi arsip), dan `RICH_MINIMUM` (samakan dengan dependency Rich).
+2. Ganti metadata `[project]`, URL repository, dan nama command pada `[project.scripts]` di `pyproject.toml` agar sama dengan `PROG`.
+3. Tambahkan command dengan decorator `@command` dan `@argument` (lihat contoh di bawah). Handler menerima `(args, console)` lalu mengembalikan `(result_dict, exit_code)`.
+4. Ganti command contoh dengan logika aplikasimu, tambah tes perilakunya, dan perbarui README/badge ini. Jika menamai ulang folder paket tanpa script, perbarui imports, entry point, package discovery, tes, dan workflow.
 5. Sesuaikan pemilik lisensi pada salinanmu sambil mempertahankan notice yang berlaku untuk kode yang kamu gunakan.
 
-Contoh handler:
+Contoh command:
 
 ```python
+from .commands import argument, command
+
+
+@command('build', help='Build project output.')
+@argument('target', nargs='?', default='dist')
+@argument('--clean', action='store_true', help='Remove old output first.')
 def build(args, console):
     console.keep('files')  # Selalu tampilkan seluruh field ini, termasuk jika nilainya list.
     console.progress('Building output...')
@@ -107,12 +125,7 @@ def build(args, console):
     return {'status': 'SUCCESS', 'files': 3}, 0
 ```
 
-Registrasi command di `build_parser()`, sebelum loop `add_output_flags`:
-
-```python
-command = subcommands.add_parser('build', help='Build project output.')
-command.set_defaults(handler=build)
-```
+`@argument` menerima parameter yang sama dengan `argparse.add_argument` dan dibaca dari atas ke bawah. Command tampil di help sesuai urutan definisinya, dan opsi output (`--json`, `--pretty`, `--log-dir`, dan lainnya) ditambahkan otomatis. Nama command yang terdaftar dua kali memunculkan `ValueError`. Jika command ditaruh di modul lain, impor modul itu di `cli.py` sebelum `build_parser()` dipanggil.
 
 Renderer juga dapat dipakai langsung:
 
@@ -135,9 +148,15 @@ cli_template/
   __main__.py       # python -m cli_template
   cli.py            # Branding, parser, dan contoh handler
   console.py        # Tampilan terminal dan JSON
+  commands.py       # Decorator @command/@argument dan registry command
+  status.py         # Kosakata status bersama (berhasil, gagal, peringatan)
   summary.py        # Pemilihan contoh dan pengelompokan penyebab
   archives.py       # Penyimpanan serta penghapusan hasil lengkap
-tests/test_cli.py   # Tes CLI asli dan kontrak renderer
+tests/
+  test_cli.py           # Tes CLI lewat subprocess dan kontrak renderer
+  test_presentation.py  # Ringkasan, arsip, branding, decorator, dan doctor
+  test_rename.py        # Script rename pada salinan project
+scripts/rename_template.py  # Ganti nama template menjadi CLI milikmu
 .github/workflows/tests.yml
 pyproject.toml
 ```

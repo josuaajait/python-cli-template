@@ -2,6 +2,8 @@
 """Choose representative rows without mutating the machine-readable payload."""
 from dataclasses import dataclass
 
+from .status import FAILED
+
 
 PREVIEW_ROWS = 8
 
@@ -17,7 +19,7 @@ def failure_reason(row):
     if not isinstance(row, dict):
         return None
     reason = row.get('reason') or row.get('error')
-    failed = (str(row.get('status', '')).upper() in {'FAILED', 'ERROR', 'INVALID', 'NOT READY'}
+    failed = (str(row.get('status', '')).upper() in FAILED
               or row.get('ok') is False or row.get('valid') is False or bool(row.get('error')))
     if failed:
         return str(reason or row.get('message') or row.get('detail') or 'Cause unavailable')

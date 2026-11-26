@@ -15,16 +15,14 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .archives import log_directory, save_result
+from .archives import DEFAULT_APP_ID, DEFAULT_LOG_ENV, log_directory, save_result
+from .status import FAILED, GOOD, WARN
 from .summary import preview
 
 
 _active = ContextVar('cli_console', default=None)
 _escapes = re.compile(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-_]')
 _controls = re.compile(r'[\x00-\x08\x0b-\x1f\x7f-\x9f]')
-_good = {'SUCCESS', 'READY', 'PASSED', 'VALID', 'COMPLETE'}
-_bad = {'ERROR', 'INVALID', 'FAILED'}
-_warn = {'WARNING', 'CANCELLED', 'SKIPPED', 'NOT READY'}
 
 
 def current_console():
@@ -96,8 +94,9 @@ def _value(value):
 
 class Console:
     def __init__(self, *, title='PYTHON CLI', description='A reusable Python CLI starter',
-                 mode='auto', no_color=False):
+                 mode='auto', no_color=False, app_id=DEFAULT_APP_ID, log_env=DEFAULT_LOG_ENV):
         self.title, self.description = title, description
+        self.app_id, self.log_env = app_id, log_env
         self.output, self.errors = sys.stdout, sys.stderr
         self.essential = ()
         self.log_dir = None
@@ -105,6 +104,10 @@ class Console:
         self._thread = None
         self._lock = threading.RLock()
         self.configure(mode, no_color)
+
+    @property
+    def archive_root(self):
+        return log_directory(self.log_dir, app_id=self.app_id, env=self.log_env)
 
     def configure(self, mode='auto', no_color=False):
         self.pretty = mode == 'pretty' or (mode == 'auto' and self.output.isatty())
@@ -162,10 +165,10 @@ class Console:
             elif 'valid' in value:
                 status = 'VALID' if value['valid'] else 'INVALID'
         status = str(status or 'RESULT')
-        failed = exit_code not in (0, 130) or status.upper() in _bad | {'NOT READY'}
+        failed = exit_code not in (0, 130) or status.upper() in FAILED
         self._summarized = False
         if self.pretty:
-            color = 'green' if status in _good else 'red' if failed else 'yellow' if status in _warn else 'cyan'
+            color = 'green' if status in GOOD else 'red' if failed else 'yellow' if status in WARN else 'cyan'
             heading = Text(_terminal_text(status, self.output), style='bold ' + color)
             body = value
             if isinstance(value, dict):
@@ -192,7 +195,7 @@ class Console:
 
         if archive and (self._summarized or failed):
             try:
-                path = save_result(log_directory(self.log_dir), value, trace)
+                path = save_result(self.archive_root, value, trace)
             except (OSError, RuntimeError, ValueError) as error:
                 self._print(f'WARNING: Cannot save archive: {error}', stream=self.errors)
                 self._print(json.dumps(value, ensure_ascii=True, indent=2), stream=self.errors)

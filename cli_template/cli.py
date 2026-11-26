@@ -4,18 +4,24 @@ import hashlib
 from importlib.metadata import version
 import math
 import platform
+import re
 import sys
 import time
 import traceback
 
 from . import __version__
-from .archives import clean_archives, list_archives, log_directory
+from .archives import clean_archives, list_archives
+from .commands import add_commands, argument, command
 from .console import Console, current_console
 
 
-# Customize these two values to brand your new application.
-APP_NAME = 'PYTHON CLI'
+# Customize these values to brand your new application.
+APP_NAME = 'PYTHON CLI'                # Title shown in the terminal header.
 APP_DESCRIPTION = 'A reusable Python CLI starter'
+PROG = 'python-cli'                    # Command name in help; match [project.scripts].
+APP_ID = 'python-cli-template'         # Folder name for per-user archives.
+LOG_DIR_ENV = 'PYTHON_CLI_LOG_DIR'     # Environment variable that overrides the archive folder.
+RICH_MINIMUM = (14, 2)                 # Keep in sync with the rich dependency in pyproject.toml.
 
 
 class StyledParser(argparse.ArgumentParser):
@@ -36,7 +42,7 @@ def add_output_flags(parser):
     group.add_argument('--debug', action='store_true', default=argparse.SUPPRESS,
                        help='Show the full exception traceback on stderr.')
     group.add_argument('--log-dir', metavar='DIR', default=argparse.SUPPRESS,
-                       help='Archive directory (also PYTHON_CLI_LOG_DIR).')
+                       help=f'Archive directory (also {LOG_DIR_ENV}).')
     group.add_argument('--no-archive', action='store_true', default=argparse.SUPPRESS,
                        help='Skip saving complete results for this run.')
     group.add_argument('--no-color', action='store_true', default=argparse.SUPPRESS,
@@ -57,15 +63,34 @@ def delay_seconds(value):
     return number
 
 
+@command('greet', help='Print a friendly structured greeting.')
+@argument('name', nargs='?', default='developer')
+@argument('--shout', action='store_true', help='Use uppercase text.')
 def greet(args, console):
     message = f'Hello, {args.name}!'
     return {'status': 'SUCCESS', 'message': message.upper() if args.shout else message}, 0
 
 
+def release(text):
+    """Leading numeric release parts, e.g. '14.2.0rc1' -> (14, 2, 0)."""
+    parts = []
+    for part in text.split('.'):
+        digits = re.match(r'\d+', part)
+        if digits is None:
+            break
+        parts.append(int(digits.group()))
+        if digits.end() != len(part):
+            break
+    return tuple(parts)
+
+
+@command('doctor', help='Check the local Python runtime; makes no network requests.')
 def doctor(args, console):
+    rich_version = version('rich')
+    rich_minimum = '.'.join(map(str, RICH_MINIMUM))
     checks = [
         {'name': 'Python >=3.11', 'ok': sys.version_info >= (3, 11), 'detail': platform.python_version()},
-        {'name': 'Rich', 'ok': True, 'detail': version('rich')},
+        {'name': f'Rich >={rich_minimum}', 'ok': release(rich_version) >= RICH_MINIMUM, 'detail': rich_version},
     ]
     ready = all(check['ok'] for check in checks)
     return {'status': 'READY' if ready else 'NOT READY', 'ready': ready,
@@ -97,20 +122,11 @@ def batch_demo(console):
             'failed': failures, 'results': rows}, int(bool(failures))
 
 
-def archives(args, console):
-    root = log_directory(console.log_dir)
-    entries = list_archives(root)
-    size = sum(entry.size for entry in entries.values())
-    result = {'status': 'SUCCESS', 'directory': str(root), 'archives': len(entries), 'bytes': size}
-    if args.clean and entries:
-        try:
-            answer = console.read(f'Delete {len(entries)} archives ({size} bytes)? [y/N] ')
-        except EOFError:
-            answer = ''
-        result['removed'] = clean_archives(entries) if answer.strip().lower() in ('y', 'yes') else 0
-    return result, 0
-
-
+@command('demo', help='Show actual sample work with progress and a results table.')
+@argument('--batch', action='store_true', help='Validate 1,000 local records with three sample failures.')
+@argument('--steps', type=step_count, default=3, help='Number of sample inputs (1-20).')
+@argument('--delay', type=delay_seconds, default=0.35, help='Demo pacing per step, in seconds (0-5).')
+@argument('--fail', action='store_true', help='Demonstrate a failed result and exit code 1.')
 def demo(args, console):
     """Hash sample inputs; delay is only for demonstrating a running spinner."""
     if args.batch:
@@ -129,28 +145,29 @@ def demo(args, console):
     return result, 1 if args.fail else 0
 
 
+@command('archives', help='Show the count and size of saved runs.')
+@argument('--clean', action='store_true', help='Review size and confirm deletion of these archives.')
+def archives(args, console):
+    root = console.archive_root
+    entries = list_archives(root)
+    size = sum(entry.size for entry in entries.values())
+    result = {'status': 'SUCCESS', 'directory': str(root), 'archives': len(entries), 'bytes': size}
+    if args.clean and entries:
+        try:
+            answer = console.read(f'Delete {len(entries)} archives ({size} bytes)? [y/N] ')
+        except EOFError:
+            answer = ''
+        result['removed'] = clean_archives(entries) if answer.strip().lower() in ('y', 'yes') else 0
+    return result, 0
+
+
 def build_parser():
-    parser = StyledParser(prog='python-cli', description=APP_DESCRIPTION)
+    parser = StyledParser(prog=PROG, description=APP_DESCRIPTION)
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     subcommands = parser.add_subparsers(dest='command', required=True, metavar='COMMAND')
-    hello = subcommands.add_parser('greet', help='Print a friendly structured greeting.')
-    hello.add_argument('name', nargs='?', default='developer')
-    hello.add_argument('--shout', action='store_true', help='Use uppercase text.')
-    hello.set_defaults(handler=greet)
-    health = subcommands.add_parser('doctor', help='Check the local Python runtime; makes no network requests.')
-    health.set_defaults(handler=doctor)
-    example = subcommands.add_parser('demo', help='Show actual sample work with progress and a results table.')
-    example.add_argument('--batch', action='store_true', help='Validate 1,000 local records with three sample failures.')
-    example.add_argument('--steps', type=step_count, default=3, help='Number of sample inputs (1-20).')
-    example.add_argument('--delay', type=delay_seconds, default=0.35,
-                         help='Demo pacing per step, in seconds (0-5).')
-    example.add_argument('--fail', action='store_true', help='Demonstrate a failed result and exit code 1.')
-    example.set_defaults(handler=demo)
-    logs = subcommands.add_parser('archives', help='Show the count and size of saved runs.')
-    logs.add_argument('--clean', action='store_true', help='Review size and confirm deletion of these archives.')
-    logs.set_defaults(handler=archives)
-    for command in (parser, *subcommands.choices.values()):
-        add_output_flags(command)
+    add_commands(subcommands)
+    for subparser in (parser, *subcommands.choices.values()):
+        add_output_flags(subparser)
     return parser
 
 
@@ -164,7 +181,8 @@ def main(argv=None):
     preferences.add_argument('--no-color', action='store_true')
     early, _ = preferences.parse_known_args(arguments[:arguments.index('--')] if '--' in arguments else arguments)
     with Console(title=APP_NAME, description=APP_DESCRIPTION,
-                 mode=early.output_format, no_color=early.no_color) as console:
+                 mode=early.output_format, no_color=early.no_color,
+                 app_id=APP_ID, log_env=LOG_DIR_ENV) as console:
         args = build_parser().parse_args(arguments)
         console.configure(getattr(args, 'output_format', 'auto'), getattr(args, 'no_color', False))
         console.log_dir = getattr(args, 'log_dir', None)

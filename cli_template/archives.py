@@ -12,18 +12,20 @@ from uuid import uuid4
 
 _RUN_NAME = re.compile(r'run-[0-9a-f]{32}')
 _FILES = ('result.json', 'result.log')
+DEFAULT_APP_ID = 'python-cli-template'
+DEFAULT_LOG_ENV = 'PYTHON_CLI_LOG_DIR'
 
 
-def log_directory(override=None):
-    if override or os.environ.get('PYTHON_CLI_LOG_DIR'):
-        return Path(override or os.environ['PYTHON_CLI_LOG_DIR']).expanduser().absolute()
+def log_directory(override=None, *, app_id=DEFAULT_APP_ID, env=DEFAULT_LOG_ENV):
+    if override or os.environ.get(env):
+        return Path(override or os.environ[env]).expanduser().absolute()
     if os.name == 'nt':
         base = Path(os.environ['LOCALAPPDATA']) if 'LOCALAPPDATA' in os.environ else Path.home() / 'AppData/Local'
     elif sys.platform == 'darwin':
         base = Path.home() / 'Library/Logs'
     else:
         base = Path(os.environ['XDG_STATE_HOME']) if 'XDG_STATE_HOME' in os.environ else Path.home() / '.local/state'
-    return base / 'python-cli-template' / 'logs'
+    return base / app_id / 'logs'
 
 
 def save_result(root, value, trace):

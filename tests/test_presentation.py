@@ -4,8 +4,9 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+from cli_template import commands
 from cli_template.cli import main
 from cli_template.console import Console
 
@@ -76,8 +77,11 @@ class PresentationTests(unittest.TestCase):
         self.assertIn('item-0001', err)
 
     def test_handler_exception_has_location_and_debug_trace(self):
+        failing = Mock(side_effect=RuntimeError('source unavailable'))
+        registry = [commands.Command(entry.name, entry.help, entry.arguments, failing)
+                    if entry.name == 'greet' else entry for entry in commands.REGISTRY]
         for flags in ([], ['--debug']):
-            with patch('cli_template.cli.greet', side_effect=RuntimeError('source unavailable')):
+            with patch('cli_template.commands.REGISTRY', registry):
                 code, raw, err = self.run_cli('greet', *flags)
             self.assertEqual(code, 2)
             self.assertIn('source unavailable', json.loads(raw)['message'])
@@ -123,6 +127,61 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn('Cannot save archive', err)
         self.assertIn('"step": 9', err)
+
+    def test_branding_controls_command_name_and_archive_location(self):
+        state = Path(self.logs.parent) / 'state'
+        environment = {'LOCALAPPDATA': str(state), 'XDG_STATE_HOME': str(state), 'MY_APP_LOGS': ''}
+        with patch('cli_template.cli.PROG', 'my-app'), patch('cli_template.cli.APP_ID', 'my-app'),                 patch('cli_template.cli.LOG_DIR_ENV', 'MY_APP_LOGS'), patch.dict('os.environ', environment),                 patch('cli_template.archives.sys.platform', 'linux'):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), self.assertRaises(SystemExit):
+                main(['--help'])
+            self.assertIn('usage: my-app', output.getvalue())
+            self.assertIn('MY_APP_LOGS', output.getvalue())
+
+            output, errors = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                self.assertEqual(main(['demo', '--fail', '--delay', '0', '--json']), 1)
+            self.assertEqual(len(list((state / 'my-app' / 'logs').glob('run-*'))), 1)
+
+            override = Path(self.logs.parent) / 'override'
+            with patch.dict('os.environ', {'MY_APP_LOGS': str(override)}),                     contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(main(['demo', '--fail', '--delay', '0', '--json']), 1)
+            self.assertEqual(len(list(override.glob('run-*'))), 1)
+
+    def test_decorated_command_gets_arguments_output_flags_and_help(self):
+        with patch('cli_template.commands.REGISTRY', list(commands.REGISTRY)):
+            @commands.command('count', help='Count words.')
+            @commands.argument('words', nargs='+')
+            @commands.argument('--unique', action='store_true', help='Ignore repeated words.')
+            def count(args, console):
+                words = set(args.words) if args.unique else args.words
+                return {'status': 'SUCCESS', 'count': len(words)}, 0
+
+            code, output, _ = self.run_cli('count', 'a', 'b', 'a', '--unique', '--json')
+            self.assertEqual((code, json.loads(output)['count']), (0, 2))
+            code, output, _ = self.run_cli('--pretty', 'count', 'a', 'a')
+            self.assertEqual(code, 0)
+            self.assertIn('2', output)
+
+            help_text = io.StringIO()
+            with contextlib.redirect_stdout(help_text), self.assertRaises(SystemExit):
+                main(['--help'])
+            self.assertIn('Count words.', help_text.getvalue())
+            self.assertLess(help_text.getvalue().index('archives'), help_text.getvalue().index('count'))
+
+            with self.assertRaises(ValueError):
+                commands.command('count')(count)
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            main(['count', 'a'])
+
+    def test_doctor_rejects_rich_older_than_minimum(self):
+        for installed, ready in (('14.1.9', False), ('14.2.0', True), ('15.0.0rc1', True)):
+            with self.subTest(installed=installed), patch('cli_template.cli.version', return_value=installed):
+                code, output, _ = self.run_cli('doctor', '--json')
+                data = json.loads(output)
+                self.assertEqual(code, 0 if ready else 1)
+                self.assertEqual(data['ready'], ready)
+                self.assertEqual(data['checks'][1]['detail'], installed)
 
     def test_windows_without_color_support_uses_plain_text(self):
         class Terminal(io.StringIO):
