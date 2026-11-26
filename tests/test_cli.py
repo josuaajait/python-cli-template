@@ -158,11 +158,13 @@ class ConsoleTests(unittest.TestCase):
         self.assertIn('output.json', text.replace('\n', '').replace(' ', '').replace('|', ''))
 
     def test_wide_unicode_values_fit_terminal_cells_and_keep_table_borders(self):
-        text = self.render({'message': '\u754c' * 40}, columns='36', no_color=True)
-        self.assertEqual(text.count('\u754c'), 40)
-        for line in text.splitlines():
-            cells = len(line.replace('\u754c', '')) + 2 * line.count('\u754c')
-            self.assertLessEqual(cells, 35, line)
+        # One field renders as a wrapped line; two fields render as a table.
+        for value in ({'message': '\u754c' * 40}, {'message': '\u754c' * 40, 'script': 'cjk'}):
+            text = self.render(value, columns='36', no_color=True)
+            self.assertEqual(text.count('\u754c'), 40)
+            for line in text.splitlines():
+                cells = len(line.replace('\u754c', '')) + 2 * line.count('\u754c')
+                self.assertLessEqual(cells, 35, line)
         table_lines = [line for line in text.splitlines() if line.startswith(('+', '|'))]
         border_width = len(table_lines[0])
         for line in table_lines:

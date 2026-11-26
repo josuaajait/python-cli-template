@@ -33,6 +33,7 @@ class Command:
     help: str | None
     arguments: tuple[ArgumentSpec, ...]
     handler: Handler
+    archive: bool = True
 
 
 REGISTRY: list[Command] = []
@@ -47,12 +48,15 @@ def argument(*flags: str, **options: Any) -> Callable[[H], H]:
     return attach
 
 
-def command(name: str, *, help: str | None = None) -> Callable[[Handler], Handler]:
-    """Register the decorated `(args, console) -> (result, exit_code)` handler."""
+def command(name: str, *, help: str | None = None, archive: bool = True) -> Callable[[Handler], Handler]:
+    """Register the decorated `(args, console) -> (result, exit_code)` handler.
+
+    `archive=False` never saves this command's results, e.g. for commands that only report on archives.
+    """
     def register(handler: Handler) -> Handler:
         if any(existing.name == name for existing in REGISTRY):
             raise ValueError(f'command already registered: {name}')
-        REGISTRY.append(Command(name, help, tuple(getattr(handler, '_cli_arguments', ())), handler))
+        REGISTRY.append(Command(name, help, tuple(getattr(handler, '_cli_arguments', ())), handler, archive))
         return handler
     return register
 
@@ -63,4 +67,4 @@ def add_commands(subcommands: argparse._SubParsersAction[Any]) -> None:
         parser = subcommands.add_parser(entry.name, help=entry.help)
         for flags, options in entry.arguments:
             parser.add_argument(*flags, **options)
-        parser.set_defaults(handler=entry.handler)
+        parser.set_defaults(handler=entry.handler, archive_results=entry.archive)

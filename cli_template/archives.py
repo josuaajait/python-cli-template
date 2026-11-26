@@ -60,6 +60,11 @@ class ArchiveSnapshot:
     files: tuple[tuple[int, int, int, int], ...]
     size: int
 
+    @property
+    def saved_ns(self) -> int:
+        """When result.json was written, in nanoseconds since the epoch."""
+        return self.files[0][3]
+
 
 def _regular(info: os.stat_result, kind: Callable[[int], bool]) -> bool:
     return kind(info.st_mode) and not (
@@ -91,6 +96,28 @@ def list_archives(root: Path) -> dict[Path, ArchiveSnapshot]:
                 if snapshot is not None:
                     entries[path] = snapshot
     return entries
+
+
+def run_id(path: Path) -> str:
+    return path.name.removeprefix('run-')
+
+
+def find_archive(entries: dict[Path, ArchiveSnapshot], prefix: str) -> Path:
+    """The single archive whose run ID starts with `prefix` (a leading 'run-' is accepted)."""
+    wanted = prefix.strip().lower().removeprefix('run-')
+    if not re.fullmatch(r'[0-9a-f]{1,32}', wanted):
+        raise LookupError(f'Run ID must be 1-32 hexadecimal characters: {prefix}')
+    matches = [path for path in entries if run_id(path).startswith(wanted)]
+    if not matches:
+        raise LookupError(f'No saved run matches {prefix}.')
+    if len(matches) > 1:
+        raise LookupError(f'{len(matches)} saved runs match {prefix}; use more characters.')
+    return matches[0]
+
+
+def read_result(path: Path) -> Any:
+    with (path / 'result.json').open(encoding='utf-8') as stream:
+        return json.load(stream)
 
 
 def clean_archives(entries: dict[Path, ArchiveSnapshot]) -> int:

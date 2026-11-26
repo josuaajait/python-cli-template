@@ -41,6 +41,7 @@ class RenameTemplateTests(unittest.TestCase):
         self.assertIn('usage: my-tool', help_text.stdout)
         self.assertIn('Does my work', help_text.stdout)
         self.assertIn('MY_TOOL_LOG_DIR', help_text.stdout)
+        self.assertIn('MY_TOOL_CONFIG', help_text.stdout)
 
         doctor = self.run_in_project('-m', 'my_tool', 'doctor')
         self.assertEqual(doctor.returncode, 0, doctor.stderr)

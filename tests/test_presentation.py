@@ -1,8 +1,10 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -106,6 +108,97 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual(json.loads(raw)['removed'], 1)
         self.assertIn(str(preview['bytes']), err)
         self.assertEqual(list(self.logs.iterdir()), [unrelated])
+
+    def save_runs(self, count, *, days_old=()):
+        for _ in range(count):
+            self.run_cli('demo', '--fail', '--delay', '0')
+        runs = sorted(self.logs.iterdir())
+        for index, run in enumerate(runs):
+            # Distinct, known ages: run 0 is newest; listed ages in days_old are pushed back.
+            seconds = days_old[index] * 86400 if index < len(days_old) else index * 60
+            stamp = time.time() - seconds
+            for name in ('result.json', 'result.log'):
+                os.utime(run / name, (stamp, stamp))
+        return runs
+
+    def test_archive_listing_is_newest_first_and_never_archives_itself(self):
+        runs = self.save_runs(10)
+        code, raw, _ = self.run_cli('archives', '--json')
+        self.assertEqual(code, 0)
+        listing = json.loads(raw)
+        self.assertEqual(listing['archives'], 10)
+        self.assertEqual([run['id'] for run in listing['runs']], [run.name[4:] for run in runs])
+        self.assertEqual({run['outcome'] for run in listing['runs']}, {'FAILED'})
+        self.assertEqual([run['saved'] for run in listing['runs']], sorted((r['saved'] for r in listing['runs']),
+                                                                         reverse=True))
+
+        code, output, _ = self.run_cli('archives', '--pretty')
+        self.assertEqual(code, 0)
+        self.assertIn('SUCCESS', output)
+        self.assertIn('10 total; 2 rows omitted from preview.', output)
+        self.assertIn('Full result: use --json.', output)
+        self.assertIn(listing['runs'][0]['id'], output)
+        self.assertNotIn(listing['runs'][9]['id'], output)
+        self.assertEqual(len(list(self.logs.iterdir())), 10)
+
+    def test_show_returns_complete_saved_result_by_id_prefix(self):
+        self.run_cli('demo', '--batch')
+        run, = self.logs.iterdir()
+        code, raw, _ = self.run_cli('archives', '--show', run.name[4:10].upper())
+        self.assertEqual(code, 0)
+        shown = json.loads(raw)
+        self.assertEqual(shown['id'], run.name[4:])
+        self.assertEqual(shown['result'], json.loads((run / 'result.json').read_text('utf-8')))
+        self.assertEqual(len(shown['result']['results']), 1000)
+        self.assertEqual(self.run_cli('archives', '--show', run.name)[0], 0)
+
+        run.rename(self.logs / ('run-' + 'a' * 31 + '1'))
+        self.run_cli('demo', '--fail', '--delay', '0')
+        other, = (path for path in self.logs.iterdir() if not path.name.startswith('run-aaaa'))
+        other.rename(self.logs / ('run-' + 'a' * 31 + '2'))
+        for prefix, message in (('aaaa', '2 saved runs match'), ('b', 'No saved run matches'),
+                                ('xyz', 'hexadecimal')):
+            with self.subTest(prefix=prefix):
+                code, raw, _ = self.run_cli('archives', '--show', prefix)
+                self.assertEqual(code, 2)
+                self.assertIn(message, json.loads(raw)['message'])
+        self.assertEqual(len(list(self.logs.iterdir())), 2)
+
+    def test_clean_can_target_old_runs_without_asking(self):
+        runs = self.save_runs(3, days_old=(10, 0, 8))
+        with patch('builtins.input', side_effect=AssertionError('--yes must not prompt')):
+            code, raw, _ = self.run_cli('archives', '--clean', '--older-than', '7d', '--yes')
+        self.assertEqual(code, 0)
+        result = json.loads(raw)
+        self.assertEqual((result['matched'], result['removed']), (2, 2))
+        self.assertEqual(list(self.logs.iterdir()), [runs[1]])
+
+        with patch('builtins.input', return_value='y'):
+            _, raw, err = self.run_cli('archives', '--clean', '--older-than', '1w')
+        self.assertEqual((json.loads(raw)['matched'], json.loads(raw)['removed']), (0, 0))
+        self.assertEqual(err, '')
+        stamp = time.time() - 60
+        for name in ('result.json', 'result.log'):
+            os.utime(runs[1] / name, (stamp, stamp))
+        with patch('builtins.input', return_value='y'):
+            _, raw, err = self.run_cli('archives', '--clean', '--older-than', '30s')
+        self.assertEqual(json.loads(raw)['removed'], 1)
+        self.assertIn('Delete 1 archives', err)
+        self.assertIn('older than 30s', err)
+        self.assertEqual(list(self.logs.iterdir()), [])
+
+    def test_archive_options_reject_invalid_combinations(self):
+        for args in (['--older-than', '7d'], ['--yes'], ['--show', 'abc', '--clean']):
+            with self.subTest(args=args):
+                code, raw, _ = self.run_cli('archives', *args)
+                self.assertEqual(code, 2)
+                self.assertEqual(json.loads(raw)['status'], 'ERROR')
+        for bad in ('7', '7x', '-1d'):
+            with self.subTest(age=bad), self.assertRaises(SystemExit) as stop, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.run_cli('archives', '--clean', '--older-than', bad)
+            self.assertEqual(stop.exception.code, 2)
+        self.assertFalse(self.logs.exists())
 
     def test_cleanup_skips_archive_modified_after_preview(self):
         self.run_cli('demo', '--fail', '--delay', '0')

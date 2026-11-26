@@ -4,7 +4,7 @@
     python scripts/rename_template.py my-tool --title "MY TOOL" --description "Does my work" --dry-run
 
 It rewrites the distribution and command name, package folder and imports,
-archive folder, log-directory environment variable, terminal title and
+archive and config folders, environment variables, terminal title and
 (optionally) description in the project's text files, then renames the package
 folder. Lines containing repository URLs are left for you to update by hand.
 """
@@ -29,7 +29,8 @@ def replacements(name: str, package: str, title: str, description: str | None) -
     pairs = [
         # Longer names first: 'python-cli' is a prefix of 'python-cli-template'.
         ('python-cli-template', name),
-        ('PYTHON_CLI_LOG_DIR', package.upper() + '_LOG_DIR'),
+        # Environment variables: PYTHON_CLI_LOG_DIR, PYTHON_CLI_CONFIG, ...
+        ('PYTHON_CLI_', package.upper() + '_'),
         (OLD_PACKAGE, package),
         ('python-cli', name),
         ('PYTHON CLI', title),

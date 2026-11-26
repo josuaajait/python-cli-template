@@ -104,8 +104,13 @@ class Console:
         self.output: TextIO = sys.stdout
         self.errors: TextIO = sys.stderr
         self.essential: tuple[str, ...] = ()
+        self.record_field: str | None = None
         self.log_dir: str | None = None
         self._summarized = False
+        self._noticed = False
+        self.quiet = False
+        # Template for the archive line, e.g. 'my-app archives --show {id}'; None prints the full path.
+        self.archive_hint: str | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._token: Token[Console | None] | None = None
@@ -116,8 +121,11 @@ class Console:
     def archive_root(self) -> Path:
         return log_directory(self.log_dir, app_id=self.app_id, env=self.log_env)
 
-    def configure(self, mode: str = 'auto', no_color: bool = False) -> None:
+    def configure(self, mode: str = 'auto', no_color: bool = False, quiet: bool | None = None) -> None:
+        if quiet is not None:
+            self.quiet = quiet
         self.pretty = mode == 'pretty' or (mode == 'auto' and self.output.isatty())
+        self.jsonl = mode == 'jsonl'
         self.no_color = no_color or 'NO_COLOR' in os.environ or os.environ.get('TERM') == 'dumb'
 
     @property
@@ -144,6 +152,11 @@ class Console:
         with self._lock:
             print(line, file=stream, flush=True)
 
+    def _border(self) -> box.Box:
+        """Rounded borders where the terminal can draw them, plain ASCII everywhere else."""
+        can_draw = self._color_enabled(self.output) and _terminal_text('╭', self.output) == '╭'
+        return box.ROUNDED if can_draw else box.ASCII
+
     def _rich(self, renderable: RenderableType) -> None:
         color = self._color_enabled(self.output)
         renderer = RichConsole(file=self.output, width=self.width, color_system='standard' if color else None,
@@ -158,6 +171,10 @@ class Console:
             title.append('\n   ' + _terminal_text(self.description, self.output), style='dim')
             self._rich(title)
             self._print('')
+
+    def records(self, field: str) -> None:
+        """With --jsonl, write this top-level list one item per line."""
+        self.record_field = field
 
     def keep(self, *fields: str) -> None:
         """Show these top-level fields first and render their entire subtrees."""
@@ -178,9 +195,17 @@ class Console:
         if self.pretty:
             color = 'green' if status in GOOD else 'red' if failed else 'yellow' if status in WARN else 'cyan'
             heading = Text(_terminal_text(status, self.output), style='bold ' + color)
+            if self._noticed:
+                self._print('')
+                self._noticed = False
             body: Any = value
             if isinstance(value, dict):
                 body = {key: value[key] for key in (*self.essential, *value) if key in value and key != 'status'}
+                if 'status' in value:
+                    # A boolean 'ready'/'valid' only repeats the coloured status heading.
+                    for flag in ('ready', 'valid'):
+                        if isinstance(body.get(flag), bool) and flag not in self.essential:
+                            del body[flag]
                 if all(type(body.get(key)) is int for key in ('succeeded', 'failed')):
                     counts = f"   {body.pop('succeeded')} succeeded  /  {body.pop('failed')} failed"
                     heading.append(_terminal_text(counts, self.output))
@@ -195,9 +220,21 @@ class Console:
                     error = Text(_terminal_text(_value(body.pop(error_key)), self.output))
                     if 'location' in body:
                         error.append('\n' + _terminal_text(body.pop('location'), self.output), style='dim')
-                    self._rich(Panel(error, box=box.ASCII, border_style='red', expand=False))
+                    self._rich(Panel(error, box=self._border(), border_style='red', expand=False))
+                    if body:
+                        self._print('')
+            if isinstance(body, dict) and len(body) == 1:
+                (key, item), = body.items()
+                if not isinstance(item, (dict, list)):
+                    # One plain value reads better as a sentence than as a one-row table.
+                    text = _value(item) if key == 'message' else f'{_label(key)}: {_value(item)}'
+                    for line in _wrap_cells(_terminal_text(text, self.output), self.width - 2):
+                        self._print(' ' + line)
+                    body = {}
             if body or not isinstance(body, dict):
                 self._render(body)
+        elif self.jsonl:
+            self._json_lines(value)
         else:
             print(json.dumps(value, ensure_ascii=True, indent=2), file=self.output)
 
@@ -211,11 +248,44 @@ class Console:
                     self._print(trace, stream=self.errors)
                     debug = False
             else:
-                self._print(f'Archive: {path}', stream=self.output if self.pretty else self.errors)
+                if self.pretty:
+                    self._print('')
+                    if self.archive_hint:
+                        short = path.name.removeprefix('run-')[:8]
+                        # Printed as one line so the command can be copied whole; the terminal soft-wraps it.
+                        hint = _terminal_text('   ' + self.archive_hint.replace('{id}', short), self.output)
+                        line = _terminal_text(f' Archive: {short}', self.output) + self._style(hint, '2', self.output)
+                        with self._lock:
+                            print(line, file=self.output, flush=True)
+                    else:
+                        self._print(f' Archive: {path}')
+                elif not self.quiet:
+                    self._print(f'Archive: {path}', stream=self.errors)
         elif self._summarized:
-            self._print('Full result: use --json.')
+            self._print('')
+            self._print(' Full result: use --json.')
         if debug and trace:
             self._print(trace, stream=self.errors)
+
+    def _json_lines(self, value: Any) -> None:
+        """One record per stdout line; the remaining fields go to stderr as one summary line."""
+        field = None
+        if isinstance(value, dict):
+            lists = [key for key, item in value.items() if isinstance(item, list)]
+            if self.record_field in lists:
+                field = self.record_field
+            elif len(lists) == 1:
+                field = lists[0]
+        with self._lock:
+            if field is None:
+                print(json.dumps(value, ensure_ascii=True), file=self.output, flush=True)
+                return
+            for item in value[field]:
+                print(json.dumps(item, ensure_ascii=True), file=self.output)
+            self.output.flush()
+            if not self.quiet:
+                summary = {key: item for key, item in value.items() if key != field}
+                print(json.dumps(summary, ensure_ascii=True), file=self.errors, flush=True)
 
     def _section(self, title: str) -> None:
         self._print('')
@@ -279,8 +349,7 @@ class Console:
                         self._print(' ' + line)
             return
         wide = any(_cell_width(char) == 2 for row in cells for cell in row for char in cell)
-        can_draw = self._color_enabled(self.output) and _terminal_text('╭', self.output) == '╭'
-        table = Table(box=box.ROUNDED if can_draw else box.ASCII, border_style='dim cyan', header_style='bold cyan',
+        table = Table(box=self._border(), border_style='dim cyan', header_style='bold cyan',
                       padding=(0, 1), safe_box=False)
         for heading in cells[0]:
             table.add_column(Text(heading), overflow='fold', min_width=2 if wide else 1)
@@ -290,9 +359,11 @@ class Console:
 
     def notice(self, message: object, level: str = 'INFO') -> None:
         self.stop()
-        if not self.pretty:
+        # Quiet keeps warnings and errors; it only drops progress and informational notices.
+        if not self.pretty or (self.quiet and level not in ('ERROR', 'WARN')):
             return
         color = '31' if level == 'ERROR' else '33' if level == 'WARN' else '32' if level == 'OK' else '36'
+        self._noticed = True
         for index, line in enumerate(_clean(message).splitlines()):
             self._print(f' [{level}] {line}' if index == 0 else ' ' + line,
                         stream=self.errors, code=color)
@@ -320,9 +391,12 @@ class Console:
             print(message, file=self.errors)
 
     def progress(self, message: str) -> None:
-        self.notice(message, 'WORKING')
-        if not self.pretty or not self.errors.isatty() or os.environ.get('TERM') == 'dumb':
+        if self.quiet or not self.pretty or not self.errors.isatty() or os.environ.get('TERM') == 'dumb':
+            # Without an animated spinner, a [WORKING] line is the only sign of progress.
+            self.notice(message, 'WORKING')
             return
+        # The spinner shows the message itself; an extra [WORKING] line would repeat it.
+        self.stop()
         self._stop.clear()
 
         def animate() -> None:

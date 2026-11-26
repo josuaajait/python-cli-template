@@ -1,6 +1,6 @@
 # Working on Python CLI Template
 
-Read README.md and docs/design.md. This repository is a generic, Rich-powered Python CLI starter; keep application-specific integrations in examples or separate projects.
+Read README.md, and docs/design.md when it exists locally (docs/ is not tracked). This repository is a generic, Rich-powered Python CLI starter; keep application-specific integrations in examples or separate projects.
 
 - Python >=3.11; Rich for terminal rendering; additional runtime dependencies need an explicit product reason.
 - Brand settings live in cli_template/cli.py; rendering lives in console.py.
